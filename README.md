@@ -59,15 +59,38 @@ SharePoint (Graph API)
 
 ### Dimensional model
 
+
+Two fact tables sharing conformed `dim_date` and `dim_rocket`, which is what lets the CFO put revenue and production cost side by side on a single rocket model or a single month.
+
 | Table | Type | Notes |
 |---|---|---|
-| `dim_date` | Static | Pre-populated calendar |
-| `dim_customer` | SCD Type 1 | Overwrite on change |
-| `dim_salesperson` | SCD Type 2 | History tracked — territory and role changes affect commission attribution |
-| `dim_rocket` | SCD Type 2 | History tracked — product spec and pricing changes matter for margin analysis |
-| `dim_employee` | SCD Type 1 | |
-| `fact_sales` | Transactional | Grain: one row per sale line |
-| `fact_production_cost` | Transactional | Grain: one row per production invoice line |
+| `fact_sales` | Transactional | Grain: one row per rocket sale. Measures: `sale_price`, `commission_paid`. Also carries commission payout detail (`commission_paid_date`, `paid_to`) |
+| `fact_production_expense` | Transactional | Grain: one row per invoice line. Measure: `amount`. Payee resolved by `party_type` to either an employee or a vendor |
+| `dim_date` | Static | Pre-populated calendar — year, quarter, month, day-of-week, weekend flag. Conformed across both facts |
+| `dim_rocket` | SCD Type 1 | Product master — fuel type, payload, fuel consumption, estimated lifetime launches, status. Conformed across both facts |
+| `dim_customer` | SCD Type 1 | Purchasing organisations — industry, founding year, contact |
+| `dim_salesperson` | SCD Type 1 | Sales staff and sales region. `is_active` is a soft-delete flag, not history |
+| `dim_employee` | SCD Type 1 | Internal staff paid against production expenses. Retains `original_employee_id` from source |
+| `dim_vendor` | SCD Type 1 | External suppliers paid against production expenses. Retains `original_vendor_id` from source |
+| `dim_description` | SCD Type 1 | Invoice narrative and `expense_category`, keyed on `invoice_id` |
+| `dim_service_contract` | SCD Type 1 | Post-sale service agreements, hanging off `fact_sales.sale_id` |
+| `energy_prices` | Reference | Daily fuel and material prices (liquid hydrogen, APCP, uranium-235) with a `forecast_source` flag distinguishing actuals from forecasts. Sits outside the star — consumed for cost modelling, not aggregated against a business event |
+
+### Notes on the model
+
+**Polymorphic payee on production expense.** A production invoice can be paid to an internal employee or an external vendor. Rather than splitting into two fact tables or forcing a single "party" dimension over two very different entities, the fact carries `party_type` alongside nullable `employee_id` and `vendor_id`. Exactly one of the two is populated per row, enforced in the Gold load. The trade-off is a conditional join in reporting, in exchange for one clean cost fact that totals correctly without a union.
+
+**Description as a dimension, not fact columns.** Invoice text and expense category are keyed on `invoice_id` and kept out of the fact. Categorisation logic can be corrected in one place without rewriting fact rows, and free-text notes stay off the high-row-count table.
+
+**Service contract keyed to the sale.** A contract is a child of a sale, so it references `sale_id` directly. This makes attach-rate and post-sale revenue questions answerable without a bridge table.
+
+**Source IDs preserved.** `original_employee_id` and `original_vendor_id` sit alongside the generated surrogate keys, which is what makes reconciliation against source files possible when a number is disputed.
+
+**Current state is SCD Type 1.** Dimensions overwrite on change, which is correct for the current scope. The first place Type 2 would be needed is `dim_salesperson` — when a rep changes territory, Type 1 behaviour re-attributes their historical commission to the new region. If territory-level historical reporting is ever required, that's the dimension to convert first, and `dim_rocket` second if spec changes need to be reflected in historical margin.
+
+---
+<img width="1758" height="1016" alt="Untitled" src="https://github.com/user-attachments/assets/f65bb2c7-ce5d-47f2-9c5f-a4f4abad1aa8" />
+
 
 ---
 
